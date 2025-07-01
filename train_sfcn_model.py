@@ -2,11 +2,14 @@ from dp_model.model_files.sfcn import SFCN
 from dp_model import dp_loss as dpl
 from dp_model import dp_utils as dpu
 
-import numpy as np
 import os
+import random
+import numpy as np
 import pandas as pd
 import nibabel as nib
 from tqdm import tqdm
+import matplotlib.pyplot as plt
+import argparse
 
 import torch
 import torch.nn.functional as F
@@ -14,22 +17,45 @@ import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import Dataset, DataLoader
 
-from sklearn.metrics import f1_score, roc_auc_score, accuracy_score
+from sklearn.metrics import f1_score, roc_auc_score, accuracy_score, roc_curve, auc
 
 
 # -----------------------
 # Paths and Hyperparameters
 # -----------------------
 input_root = '../ABIDE_Dataset/data/JustBrain/ABIDEI'
-participants_path = '../ABIDE_Dataset/data/ABIDEI/participants.tsv'
+participants_path = './ABIDEI/participants.tsv'
 label_column = 'label'
 split_column = 'dataset'
 pretrained_model_path = './sex_prediction/run_20191008_00_epoch_last.p'
 save_model_path = './ABIDEI/finetuned_sfcn_best.pth'
 
-batch_size = 2
-num_epochs = 15
-learning_rate = 1e-4
+# -----------------------
+# Set Random Seed
+# -----------------------
+def set_seed(seed=42):
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed(seed)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
+
+set_seed(42)
+
+# -----------------------
+# Parser Arguments
+# -----------------------
+parser = argparse.ArgumentParser(description='Example BIDS App entrypoint script.')
+parser.add_argument('--lr', type=float, default = 1e-4, help='Learning Rate (ex 3e-4 or 0.0003)')
+parser.add_argument('--batch', type=int, default = 4, help='Batch Size')
+parser.add_argument('--epochs', type=int, default = 15, help='Total Number of Epochs')
+
+## Parse Data
+args = parser.parse_args()
+learning_rate = args.lr
+batch_size = args.batch
+num_epochs = args.epochs
 
 # -----------------------
 # Model
@@ -77,8 +103,8 @@ df_all = df_all.set_index('participant_id')
 df_train = df_all[df_all[split_column] == 'train']
 df_val = df_all[df_all[split_column] == 'val']
 
-train_loader = DataLoader(ABIDEIDataset(input_root, df_train, label_column), batch_size=batch_size, shuffle=True, num_workers=4)
-val_loader = DataLoader(ABIDEIDataset(input_root, df_val, label_column), batch_size=batch_size, shuffle=False, num_workers=4)
+train_loader = DataLoader(ABIDEIDataset(input_root, df_train, label_column), batch_size=batch_size, shuffle=True, num_workers=8)
+val_loader = DataLoader(ABIDEIDataset(input_root, df_val, label_column), batch_size=batch_size, shuffle=False, num_workers=8)
 
 # -----------------------
 # Training Setup
@@ -91,6 +117,10 @@ best_val_auc = 0.0
 # -----------------------
 # Training & Evaluation Loop
 # -----------------------
+train_losses = []
+val_losses = []
+val_aucs = []
+
 for epoch in range(num_epochs):
     # ---- Training ----
     model.train()
@@ -142,6 +172,12 @@ for epoch in range(num_epochs):
         'auc': roc_auc_score(val_y, val_prob)
     }
 
+
+    train_losses.append(train_loss)
+    val_losses.append(val_loss)
+    val_aucs.append(val_metrics['auc'])
+
+    
     # Print summary
     print(f"\nEpoch {epoch+1} Summary:")
     print(f"Train Loss: {train_loss:.4f} | Acc: {train_metrics['acc']:.4f} | F1: {train_metrics['f1']:.4f} | AUC: {train_metrics['auc']:.4f}")
@@ -152,5 +188,51 @@ for epoch in range(num_epochs):
         best_val_auc = val_metrics['auc']
         torch.save(model.state_dict(), save_model_path)
         print(f">>> Saved new best model at epoch {epoch+1} with AUC {best_val_auc:.4f}")
+
+# -----------------------
+# Save training log to CSV
+# -----------------------
+log_df = pd.DataFrame({
+    'epoch': list(range(1, num_epochs + 1)),
+    'train_loss': train_losses,
+    'val_loss': val_losses,
+    'val_auc': val_aucs
+})
+log_csv_path = './ABIDEI/training_log.csv'
+log_df.to_csv(log_csv_path, index=False)
+print(f"Training log saved to: {log_csv_path}")
+
+# -----------------------
+# Plot ROC Curve using best model
+# -----------------------
+model.load_state_dict(torch.load(save_model_path))
+model.eval()
+
+val_y_true, val_y_prob = [], []
+
+with torch.no_grad():
+    for inputs, labels in val_loader:
+        inputs = inputs.cuda()
+        outputs = model(inputs)[0].view(inputs.size(0), -1)
+        probs = torch.exp(outputs)
+        val_y_prob.extend(probs[:, 1].cpu().numpy())
+        val_y_true.extend(labels.numpy())
+
+fpr, tpr, _ = roc_curve(val_y_true, val_y_prob)
+roc_auc = auc(fpr, tpr)
+
+plt.figure(figsize=(6, 6))
+plt.plot(fpr, tpr, label=f'AUC = {roc_auc:.4f}')
+plt.plot([0, 1], [0, 1], 'k--', label='Chance')
+plt.xlabel('False Positive Rate')
+plt.ylabel('True Positive Rate')
+plt.title('Validation ROC Curve (Best Model)')
+plt.legend(loc='lower right')
+plt.grid(True)
+roc_curve_path = './ABIDEI/val_roc_curve.png'
+plt.tight_layout()
+plt.savefig(roc_curve_path)
+plt.show()
+print(f"ROC curve saved to: {roc_curve_path}")
 
 print("\nTraining complete.")
