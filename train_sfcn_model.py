@@ -47,13 +47,15 @@ set_seed(42)
 # Parser Arguments
 # -----------------------
 parser = argparse.ArgumentParser(description='Example BIDS App entrypoint script.')
-parser.add_argument('--lr', type=float, default = 1e-4, help='Learning Rate (ex 3e-4 or 0.0003)')
-parser.add_argument('--batch', type=int, default = 4, help='Batch Size')
+parser.add_argument('--lr', type=float, default = 1e-4, help='Learning Rate (ex 1e-4 or 0.0001)')
+parser.add_argument('--wd', type=float, default = 1e-4, help='L2 Weight Decay (ex 1e-4 or 0.0001)')
+parser.add_argument('--batch', type=int, default = 8, help='Batch Size')
 parser.add_argument('--epochs', type=int, default = 15, help='Total Number of Epochs')
 
 ## Parse Data
 args = parser.parse_args()
 learning_rate = args.lr
+weight_decay = args.wd
 batch_size = args.batch
 num_epochs = args.epochs
 
@@ -110,7 +112,7 @@ val_loader = DataLoader(ABIDEIDataset(input_root, df_val, label_column), batch_s
 # Training Setup
 # -----------------------
 criterion = nn.NLLLoss()
-optimizer = optim.Adam(model.parameters(), lr=learning_rate)
+optimizer = optim.SGD(model.parameters(), lr=learning_rate, weight_decay=weight_decay) #changed from Adam to SGD and added weight_decay which is L2 penalty at 1e-4
 
 best_val_auc = 0.0
 
