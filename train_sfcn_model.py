@@ -24,7 +24,7 @@ from sklearn.metrics import f1_score, roc_auc_score, accuracy_score, roc_curve, 
 # Paths and Hyperparameters
 # -----------------------
 input_root = '../ABIDE_Dataset/data/JustBrain/ABIDEI'
-participants_path = './ABIDEI/participants.tsv'
+participants_path = './ABIDEI/participants_allSites.tsv'
 label_column = 'label'
 split_column = 'dataset'
 pretrained_model_path = './sex_prediction/run_20191008_00_epoch_last.p'
@@ -48,7 +48,7 @@ set_seed(42)
 # -----------------------
 parser = argparse.ArgumentParser(description='Example BIDS App entrypoint script.')
 parser.add_argument('--lr', type=float, default = 1e-4, help='Learning Rate (ex 1e-4 or 0.0001)')
-parser.add_argument('--wd', type=float, default = 1e-4, help='L2 Weight Decay (ex 1e-4 or 0.0001)')
+parser.add_argument('--wd', type=float, default = 1e-4, help='L2 Weight Decay (ex 1e-5 or 0.00001)')
 parser.add_argument('--batch', type=int, default = 8, help='Batch Size')
 parser.add_argument('--epochs', type=int, default = 15, help='Total Number of Epochs')
 
@@ -63,7 +63,36 @@ num_epochs = args.epochs
 # Model
 # -----------------------
 model = SFCN(output_dim=2, channel_number=[28, 58, 128, 256, 256, 64])
-model = torch.nn.DataParallel(model)
+
+# Freeze all parameters
+#for param in model.parameters():
+    #param.requires_grad = False
+
+# Unfreeze only the last classifier layer
+#for name, param in model.named_parameters():
+    #if "classifier.conv_6" in name:
+        #param.requires_grad = True
+
+# Unfreeze only the last conv (5.0 and 5.1) and classifier layers
+#for name, param in model.named_parameters():
+    #if ("classifier.conv_6" in name) or ('feature_extractor.conv_5' in name):
+        #param.requires_grad = True
+
+# Unfreeze only the last conv (5.1) and classifier layers
+#for name, param in model.named_parameters():
+    #if ("classifier.conv_6" in name) or ('feature_extractor.conv_5.1' in name):
+        #param.requires_grad = True
+
+#for name, module in model.named_modules():
+    #if "feature_extractor" in name and not name.startswith("feature_extractor.conv_5"):
+        #module.eval()
+
+#print("Trainable parameters:")
+#for name, param in model.named_parameters():
+    #if param.requires_grad:
+        #print(name)
+
+model = torch.nn.DataParallel(model) #changed to Sequential from DataParallel
 model.load_state_dict(torch.load(pretrained_model_path, weights_only=True))
 model = model.cuda()
 
@@ -114,13 +143,18 @@ val_loader = DataLoader(ABIDEIDataset(input_root, df_val, label_column), batch_s
 criterion = nn.NLLLoss()
 optimizer = optim.SGD(model.parameters(), lr=learning_rate, weight_decay=weight_decay) #changed from Adam to SGD and added weight_decay which is L2 penalty at 1e-4
 
-best_val_auc = 0.0
+best_val_metric = 0.0
 
 # -----------------------
 # Training & Evaluation Loop
 # -----------------------
 train_losses = []
 val_losses = []
+train_accs = []
+val_accs = []
+train_f1s = []
+val_f1s = []
+train_aucs = []
 val_aucs = []
 
 for epoch in range(num_epochs):
@@ -177,6 +211,11 @@ for epoch in range(num_epochs):
 
     train_losses.append(train_loss)
     val_losses.append(val_loss)
+    train_accs.append(train_metrics['acc'])
+    val_accs.append(val_metrics['acc'])
+    train_f1s.append(train_metrics['f1'])
+    val_f1s.append(val_metrics['f1'])
+    train_aucs.append(train_metrics['auc'])
     val_aucs.append(val_metrics['auc'])
 
     
@@ -186,10 +225,10 @@ for epoch in range(num_epochs):
     print(f"Val   Loss: {val_loss:.4f} | Acc: {val_metrics['acc']:.4f} | F1: {val_metrics['f1']:.4f} | AUC: {val_metrics['auc']:.4f}")
 
     # Save best model
-    if val_metrics['auc'] > best_val_auc:
-        best_val_auc = val_metrics['auc']
+    if val_metrics['acc'] > best_val_metric:
+        best_val_metric = val_metrics['acc']
         torch.save(model.state_dict(), save_model_path)
-        print(f">>> Saved new best model at epoch {epoch+1} with AUC {best_val_auc:.4f}")
+        print(f">>> Saved new best model at epoch {epoch+1} with ACC {best_val_metric:.4f}")
 
 # -----------------------
 # Save training log to CSV
@@ -198,6 +237,11 @@ log_df = pd.DataFrame({
     'epoch': list(range(1, num_epochs + 1)),
     'train_loss': train_losses,
     'val_loss': val_losses,
+    'train_accuracy': train_accs,
+    'val_accuracy': val_accs,
+    'train_f1': train_f1s,
+    'val_f1': val_f1s,
+    'train_auc': train_aucs,
     'val_auc': val_aucs
 })
 log_csv_path = './ABIDEI/training_log.csv'
