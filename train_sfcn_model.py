@@ -24,7 +24,7 @@ from sklearn.metrics import f1_score, roc_auc_score, accuracy_score, roc_curve, 
 # Paths and Hyperparameters
 # -----------------------
 input_root = '../ABIDE_Dataset/data/JustBrain/ABIDEI'
-participants_path = './ABIDEI/participants_allSites.tsv'
+participants_path = './ABIDEI/participants.tsv'
 label_column = 'label'
 split_column = 'dataset'
 pretrained_model_path = './sex_prediction/run_20191008_00_epoch_last.p'
